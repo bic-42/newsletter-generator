@@ -1,0 +1,19 @@
+# Financial data APIs
+yfinance==0.2.18
+alpha_vantage==2.3.1
+pandas==1.5.3
+pandas-datareader==0.10.0
+
+# Language models and NLP
+openai==0.27.8
+langchain==0.0.267
+tiktoken==0.4.0
+
+# Email services
+sendgrid==6.10.0
+
+# Utilities
+python-dotenv==1.0.0
+schedule==1.2.0
+requests==2.31.0
+beautifulsoup4==4.12.2
