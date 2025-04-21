@@ -41,6 +41,8 @@ class EconomicIndicators(DataSource):
             "M2": "M2 Money Supply"        # M2 Money Supply
         }
 
+        self.logger = logger.getChild(self.__class__.__name__)
+
     def fetch_data(self, 
                   fred_indicators: Optional[Dict[str, str]] = None,
                   days: int = 365) -> Dict[str, Any]:

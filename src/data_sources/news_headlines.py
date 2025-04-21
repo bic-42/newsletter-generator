@@ -43,6 +43,8 @@ class NewsHeadlines(DataSource):
             }
         ]
 
+        self.logger = logger.getChild(self.__class__.__name__)
+
     def fetch_data(self, 
                   sources: Optional[List[Dict[str, Any]]] = None,
                   max_headlines: int = 10) -> Dict[str, Any]:

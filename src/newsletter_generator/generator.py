@@ -23,7 +23,7 @@ class NewsletterGenerator:
 
     def __init__(self):
         """Initialize the newsletter generator."""
-        self.logger = logger
+        self.logger = logger.getChild(self.__class__.__name__)
 
         # Set OpenAI API key
         if not OPENAI_API_KEY:

@@ -29,7 +29,7 @@ class EmailSender:
             subscriber_manager: SubscriberManager instance for managing subscribers
                                If None, a new instance will be created
         """
-        self.logger = logger
+        self.logger = logger.getChild(self.__class__.__name__)
 
         # Check for SendGrid API key
         if not SENDGRID_API_KEY:

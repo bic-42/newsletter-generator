@@ -26,7 +26,7 @@ class DataSource(ABC):
             name: A descriptive name for the data source
         """
         self.name = name
-        self.logger = logger
+        self.logger = logger.getChild(self.__class__.__name__)
 
     @abstractmethod
     def fetch_data(self, **kwargs) -> Dict[str, Any]:

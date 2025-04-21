@@ -8,7 +8,9 @@ from dotenv import load_dotenv
 from pathlib import Path
 
 # Import logger from config directory
-from config.logger import logger
+from ..config.logger import logger
+
+logger = logger.getChild(__name__)
 
 # Load environment variables from .env file
 env_path = Path(__file__).parent.parent / 'config' / '.env'

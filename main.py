@@ -21,6 +21,9 @@ from src.data_sources import StockMarketData, EconomicIndicators, NewsHeadlines
 from src.newsletter_generator import NewsletterGenerator
 from src.email_service import EmailSender, SubscriberManager
 
+# Initialize logger
+logger = logger.getChild(__name__)
+
 def generate_and_send_newsletter(test_mode=False, save_only=False, test_recipients=None):
     """
     Generate and send the newsletter.
