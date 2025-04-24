@@ -7,21 +7,26 @@ import os
 from dotenv import load_dotenv
 from pathlib import Path
 
-# Import logger from config directory
-from ..config.logger import logger
 
-logger = logger.getChild(__name__)
+
+
 
 # Load environment variables from .env file
-env_path = Path(__file__).parent.parent / 'config' / '.env'
-load_dotenv(dotenv_path=env_path)
+# env_path = Path(__file__).parent.parent / 'config' / '.env'
+load_dotenv()
 
 # OpenAI API Configuration
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+if OPENAI_API_KEY:
+  print(f"Successfully loaded API Key: {OPENAI_API_KEY[:4]}...{OPENAI_API_KEY[-4:]}") # Print partial key for security
+else:
+  print("API_KEY not found. Make sure it's set in your .env file and load_dotenv() was called.")
 
 # Financial Data API Keys
 ALPHA_VANTAGE_API_KEY = os.getenv('ALPHA_VANTAGE_API_KEY')
 FRED_API_KEY = os.getenv('FRED_API_KEY')
+CMC_PRO_API_KEY = os.getenv('CMC_PRO_API_KEY')
+COINGECKO_API_KEY = os.getenv('demo_api_key')
 
 # Email Configuration
 SENDGRID_API_KEY = os.getenv('SENDGRID_API_KEY')

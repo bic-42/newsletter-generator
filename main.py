@@ -13,16 +13,23 @@ import time
 import schedule
 from datetime import datetime
 from pathlib import Path
+from dotenv import load_dotenv
+
+env_path = Path(__file__).parent / '.env'
+load_dotenv(dotenv_path=env_path)
+
 import argparse
 
 from src.config import NEWSLETTER_SEND_DAY, NEWSLETTER_SEND_TIME
-from config.logger import logger
 from src.data_sources import StockMarketData, EconomicIndicators, NewsHeadlines
 from src.newsletter_generator import NewsletterGenerator
 from src.email_service import EmailSender, SubscriberManager
+import traceback
+
+import logging
 
 # Initialize logger
-logger = logger.getChild(__name__)
+logger = logging.getLogger(__name__)
 
 def generate_and_send_newsletter(test_mode=False, save_only=False, test_recipients=None):
     """
@@ -85,6 +92,10 @@ def generate_and_send_newsletter(test_mode=False, save_only=False, test_recipien
 
     except Exception as e:
         logger.error(f"Error in newsletter process: {str(e)}")
+        logger.error(f"Error caught in generate_and_send_newsletter: {str(e)}") # Keep logging the error message
+        print("\n--- Full Traceback Below (from main.py) ---")
+        traceback.print_exc() # <--- Add this line to print the full traceback to the console
+        print("--- End Traceback ---\n")
         return False
 
 def add_subscriber(email, name=None):

@@ -11,8 +11,11 @@ from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail, Attachment, FileContent, FileName, FileType, Disposition, ContentId
 
 from ..config import SENDGRID_API_KEY, EMAIL_SENDER, EMAIL_SENDER_NAME
-from config.logger import logger
 from .subscriber_manager import SubscriberManager
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 class EmailSender:
     """
@@ -29,7 +32,7 @@ class EmailSender:
             subscriber_manager: SubscriberManager instance for managing subscribers
                                If None, a new instance will be created
         """
-        self.logger = logger.getChild(self.__class__.__name__)
+        self.logger = logger
 
         # Check for SendGrid API key
         if not SENDGRID_API_KEY:

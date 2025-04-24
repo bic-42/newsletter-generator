@@ -8,7 +8,9 @@ import csv
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 
-from config.logger import logger
+import logging
+
+logger = logging.getLogger(__name__)
 
 class SubscriberManager:
     """
@@ -25,7 +27,7 @@ class SubscriberManager:
             subscribers_file: Path to the subscribers file (CSV or JSON)
                              If None, defaults to 'subscribers.json' in the config directory
         """
-        self.logger = logger.getChild(self.__class__.__name__)
+        self.logger = logger
 
         # Set default subscribers file if none provided
         if subscribers_file is None:

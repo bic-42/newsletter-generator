@@ -1,558 +1,392 @@
-"""
-Module for generating newsletter content using language models.
-"""
-
-import os
-from datetime import datetime
-from typing import Dict, Any, List, Optional, Union
 import openai
-from langchain.llms import OpenAI
-from langchain.prompts import PromptTemplate
-from langchain.chains import LLMChain
-
+from datetime import datetime
+# Ensure these imports point to your actual config/data_sources
 from ..config import OPENAI_API_KEY, NEWSLETTER_TITLE
-from config.logger import logger
-from ..data_sources import StockMarketData, EconomicIndicators, NewsHeadlines
+from ..data_sources import StockMarketData, EconomicIndicators, NewsHeadlines, CryptoDataSource
+import logging
+import html # Import for escaping in HTML conversion fallback
+
+logger = logging.getLogger(__name__)
 
 class NewsletterGenerator:
     """
-    Generator for financial newsletter content.
-
-    Uses data from various sources and language models to generate a complete newsletter.
+    Generator for financial newsletter content using direct OpenAI API calls.
+    Includes both AI-generated analysis and formatted raw data summaries.
+    Uses the recommended client pattern for the OpenAI library.
     """
 
     def __init__(self):
-        """Initialize the newsletter generator."""
-        self.logger = logger.getChild(self.__class__.__name__)
-
-        # Set OpenAI API key
+        """Initialize the newsletter generator and OpenAI client."""
+        self.client = None
         if not OPENAI_API_KEY:
-            self.logger.error("OpenAI API key is missing. Newsletter generation will fail.")
+            logger.error("OpenAI API key is missing. Newsletter generation will fail.")
         else:
-            openai.api_key = OPENAI_API_KEY
+            try:
+                self.client = openai.OpenAI(api_key=OPENAI_API_KEY)
+                logger.info("OpenAI client initialized successfully.")
+            except Exception as e:
+                 logger.error(f"Failed to initialize OpenAI client: {e}", exc_info=True)
 
         # Initialize data sources
-        self.stock_market = StockMarketData()
-        self.economic_indicators = EconomicIndicators()
-        self.news_headlines = NewsHeadlines()
+        self.stock_data = StockMarketData()
+        self.econ_data = EconomicIndicators()
+        self.news_data = NewsHeadlines()
+        self.crypto_data = CryptoDataSource()
+        self.title = NEWSLETTER_TITLE or "Financial Newsletter"
 
-        # Newsletter title
-        self.title = NEWSLETTER_TITLE
-
-    def generate_newsletter(self) -> Dict[str, Any]:
-        """
-        Generate a complete newsletter.
-
-        Returns:
-            Dictionary containing the newsletter content and metadata
-        """
-        self.logger.info("Starting newsletter generation")
-
+    def _call_openai(self, messages, model: str = "gpt-4-turbo", temperature: float = 0.2, max_tokens: int = 1500) -> str:
+        """Helper to call OpenAI ChatCompletion using the client."""
+        if not self.client:
+             logger.error("OpenAI client not available. Cannot make API call.")
+             return "Error: OpenAI client not initialized."
         try:
-            # Fetch data from all sources
-            market_data = self.stock_market.fetch_data()
-            economic_data = self.economic_indicators.fetch_data()
-            news_data = self.news_headlines.fetch_data()
-
-            # Generate newsletter sections
-            introduction = self._generate_introduction(market_data, economic_data)
-            market_summary = self.stock_market.format_data_for_report(market_data)
-            economic_summary = self.economic_indicators.format_data_for_report(economic_data)
-            news_summary = self.news_headlines.format_data_for_report(news_data)
-
-            # Generate analysis and insights
-            market_analysis = self._generate_market_analysis(market_data)
-            economic_analysis = self._generate_economic_analysis(economic_data)
-            outlook = self._generate_outlook(market_data, economic_data, news_data)
-
-            # Combine all sections
-            content = self._format_newsletter(
-                introduction=introduction,
-                market_summary=market_summary,
-                market_analysis=market_analysis,
-                economic_summary=economic_summary,
-                economic_analysis=economic_analysis,
-                news_summary=news_summary,
-                outlook=outlook
+            response = self.client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens
             )
-
-            # Create newsletter object
-            newsletter = {
-                "title": self.title,
-                "date": datetime.now().strftime("%Y-%m-%d"),
-                "content": content,
-                "html_content": self._convert_to_html(content),
-                "raw_data": {
-                    "market_data": market_data,
-                    "economic_data": economic_data,
-                    "news_data": news_data
-                }
-            }
-
-            self.logger.info("Newsletter generation completed successfully")
-            return newsletter
-
+            content = response.choices[0].message.content
+            return content.strip() if content else ""
+        except openai.AuthenticationError:
+            logger.error("OpenAI Authentication Error: Check your API key.")
+            return "Error: OpenAI authentication failed."
+        except openai.RateLimitError:
+             logger.error("OpenAI Rate Limit Error: You have exceeded your quota.")
+             return "Error: OpenAI rate limit exceeded."
+        except openai.APIConnectionError as e:
+             logger.error(f"OpenAI API Connection Error: {e}")
+             return "Error: Could not connect to OpenAI API."
         except Exception as e:
-            self.logger.error(f"Error generating newsletter: {str(e)}")
-            # Return a minimal newsletter with error information
-            return {
-                "title": self.title,
-                "date": datetime.now().strftime("%Y-%m-%d"),
-                "content": f"# Error Generating Newsletter\n\nThere was an error generating this week's newsletter: {str(e)}",
-                "html_content": f"<h1>Error Generating Newsletter</h1><p>There was an error generating this week's newsletter: {str(e)}</p>",
-                "error": str(e)
-            }
-
-    def _generate_introduction(self, market_data: Dict[str, Any], economic_data: Dict[str, Any]) -> str:
-        """
-        Generate an introduction for the newsletter.
-
-        Args:
-            market_data: Stock market data
-            economic_data: Economic indicator data
-
-        Returns:
-            Formatted introduction text
-        """
-        self.logger.info("Generating newsletter introduction")
-
-        try:
-            # Extract key market metrics for the prompt
-            market_summary = market_data.get("market_summary", {})
-            sp500_data = market_summary.get("^GSPC", {})
-            dow_data = market_summary.get("^DJI", {})
-            nasdaq_data = market_summary.get("^IXIC", {})
-
-            # Extract key economic indicators
-            economic_summary = economic_data.get("economic_summary", {})
-
-            # Create a prompt for the language model
-            prompt = PromptTemplate(
-                input_variables=["date", "sp500", "dow", "nasdaq"],
-                template="""
-                You are a professional financial analyst writing the introduction to a weekly newsletter for investors.
-                Today is {date}.
-
-                Key market indicators:
-                - S&P 500: {sp500}
-                - Dow Jones: {dow}
-                - NASDAQ: {nasdaq}
-
-                Write a professional, insightful introduction (2-3 paragraphs) for this week's financial newsletter.
-                Focus on the overall market sentiment and key themes for investors to watch.
-                Use a professional, confident tone that would be appropriate for sophisticated investors.
-                Do not include specific numbers in your response, just provide a high-level overview.
-                """
-            )
-
-            # Format the S&P 500 data for the prompt
-            sp500_text = "data not available"
-            if sp500_data:
-                change = sp500_data.get("daily_change_pct")
-                direction = "up" if change and change > 0 else "down"
-                sp500_text = f"{sp500_data.get('latest_close', 'N/A'):.2f}, {direction} {abs(change):.2f}% this week" if change else "data incomplete"
-
-            # Format the Dow data for the prompt
-            dow_text = "data not available"
-            if dow_data:
-                change = dow_data.get("daily_change_pct")
-                direction = "up" if change and change > 0 else "down"
-                dow_text = f"{dow_data.get('latest_close', 'N/A'):.2f}, {direction} {abs(change):.2f}% this week" if change else "data incomplete"
-
-            # Format the NASDAQ data for the prompt
-            nasdaq_text = "data not available"
-            if nasdaq_data:
-                change = nasdaq_data.get("daily_change_pct")
-                direction = "up" if change and change > 0 else "down"
-                nasdaq_text = f"{nasdaq_data.get('latest_close', 'N/A'):.2f}, {direction} {abs(change):.2f}% this week" if change else "data incomplete"
-
-            # Create the chain
-            llm = OpenAI(temperature=0.7)
-            chain = LLMChain(llm=llm, prompt=prompt)
-
-            # Run the chain
-            introduction = chain.run(
-                date=datetime.now().strftime("%B %d, %Y"),
-                sp500=sp500_text,
-                dow=dow_text,
-                nasdaq=nasdaq_text
-            )
-
-            # Format the introduction
-            formatted_intro = f"# {self.title}\n\n**{datetime.now().strftime('%B %d, %Y')}**\n\n{introduction.strip()}\n\n"
-
-            return formatted_intro
-
-        except Exception as e:
-            self.logger.error(f"Error generating introduction: {str(e)}")
-            return f"# {self.title}\n\n**{datetime.now().strftime('%B %d, %Y')}**\n\nWelcome to this week's financial newsletter.\n\n"
-
-    def _generate_market_analysis(self, market_data: Dict[str, Any]) -> str:
-        """
-        Generate market analysis using language models.
-
-        Args:
-            market_data: Stock market data
-
-        Returns:
-            Formatted market analysis text
-        """
-        self.logger.info("Generating market analysis")
-
-        try:
-            # Extract relevant data for the prompt
-            market_summary = market_data.get("market_summary", {})
-            stock_performance = market_data.get("stock_performance", {})
-
-            # Create a prompt for the language model
-            prompt = PromptTemplate(
-                input_variables=["market_data", "top_gainers", "top_losers"],
-                template="""
-                You are a professional financial analyst providing market analysis for a weekly investor newsletter.
-
-                Market data:
-                {market_data}
-
-                Top performing stocks:
-                {top_gainers}
-
-                Underperforming stocks:
-                {top_losers}
-
-                Based on this data, write a detailed market analysis (3-4 paragraphs) that explains:
-                1. The overall market performance and key trends
-                2. Sector-specific insights
-                3. What might be driving the performance of top gainers and losers
-                4. Technical indicators or patterns worth noting
-
-                Use a professional, analytical tone. Provide specific insights that would be valuable to investors.
-                """
-            )
-
-            # Format market data for the prompt
-            market_data_text = ""
-            for index, data in market_summary.items():
-                index_name = self.stock_market._get_index_name(index)
-                change = data.get("daily_change_pct")
-                direction = "up" if change and change > 0 else "down"
-                change_text = f"{direction} {abs(change):.2f}%" if change is not None else "unchanged"
-                market_data_text += f"- {index_name}: {data.get('latest_close', 'N/A'):.2f}, {change_text}\n"
-
-            # Format top gainers for the prompt
-            top_gainers_text = ""
-            for ticker, data in stock_performance.get("top_gainers", {}).items():
-                change = data.get("daily_change_pct")
-                top_gainers_text += f"- {ticker}: ${data.get('latest_close', 'N/A'):.2f}, up {change:.2f}%\n" if change else f"- {ticker}: data incomplete\n"
-
-            # Format top losers for the prompt
-            top_losers_text = ""
-            for ticker, data in stock_performance.get("top_losers", {}).items():
-                change = data.get("daily_change_pct")
-                top_losers_text += f"- {ticker}: ${data.get('latest_close', 'N/A'):.2f}, down {abs(change):.2f}%\n" if change else f"- {ticker}: data incomplete\n"
-
-            # Create the chain
-            llm = OpenAI(temperature=0.7)
-            chain = LLMChain(llm=llm, prompt=prompt)
-
-            # Run the chain
-            analysis = chain.run(
-                market_data=market_data_text,
-                top_gainers=top_gainers_text,
-                top_losers=top_losers_text
-            )
-
-            # Format the analysis
-            formatted_analysis = f"## Market Analysis\n\n{analysis.strip()}\n\n"
-
-            return formatted_analysis
-
-        except Exception as e:
-            self.logger.error(f"Error generating market analysis: {str(e)}")
-            return "## Market Analysis\n\nAnalysis could not be generated due to an error.\n\n"
-
-    def _generate_economic_analysis(self, economic_data: Dict[str, Any]) -> str:
-        """
-        Generate economic analysis using language models.
-
-        Args:
-            economic_data: Economic indicator data
-
-        Returns:
-            Formatted economic analysis text
-        """
-        self.logger.info("Generating economic analysis")
-
-        try:
-            # Extract relevant data for the prompt
-            economic_summary = economic_data.get("economic_summary", {})
-
-            # Create a prompt for the language model
-            prompt = PromptTemplate(
-                input_variables=["economic_indicators"],
-                template="""
-                You are a professional economist providing analysis for a weekly investor newsletter.
-
-                Economic indicators:
-                {economic_indicators}
-
-                Based on these indicators, write a detailed economic analysis (3-4 paragraphs) that explains:
-                1. The current state of the economy
-                2. Trends in inflation, employment, and growth
-                3. Potential implications for monetary policy
-                4. How these economic conditions might affect different market sectors
-
-                Use a professional, analytical tone. Provide specific insights that would be valuable to investors.
-                """
-            )
-
-            # Format economic data for the prompt
-            economic_indicators_text = ""
-            for indicator, data in economic_summary.items():
-                value = data.get("latest_value")
-                date = data.get("latest_date", "N/A")
-                change = data.get("change_pct")
-
-                # Format the value based on the indicator
-                value_str = f"{value:.2f}"
-                if "Rate" in indicator or "Unemployment" in indicator:
-                    value_str = f"{value:.2f}%"
-
-                # Format the change
-                change_str = ""
-                if change is not None:
-                    direction = "up" if change > 0 else "down"
-                    change_str = f", {direction} {abs(change):.2f}%"
-
-                economic_indicators_text += f"- {indicator}: {value_str}{change_str} (as of {date})\n"
-
-            # Create the chain
-            llm = OpenAI(temperature=0.7)
-            chain = LLMChain(llm=llm, prompt=prompt)
-
-            # Run the chain
-            analysis = chain.run(economic_indicators=economic_indicators_text)
-
-            # Format the analysis
-            formatted_analysis = f"## Economic Analysis\n\n{analysis.strip()}\n\n"
-
-            return formatted_analysis
-
-        except Exception as e:
-            self.logger.error(f"Error generating economic analysis: {str(e)}")
-            return "## Economic Analysis\n\nAnalysis could not be generated due to an error.\n\n"
-
-    def _generate_outlook(self, market_data: Dict[str, Any], economic_data: Dict[str, Any], news_data: Dict[str, Any]) -> str:
-        """
-        Generate market outlook using language models.
-
-        Args:
-            market_data: Stock market data
-            economic_data: Economic indicator data
-            news_data: News headline data
-
-        Returns:
-            Formatted outlook text
-        """
-        self.logger.info("Generating market outlook")
-
-        try:
-            # Extract relevant data for the prompt
-            market_summary = market_data.get("market_summary", {})
-            economic_summary = economic_data.get("economic_summary", {})
-            headlines = news_data.get("all_headlines", [])
-
-            # Create a prompt for the language model
-            prompt = PromptTemplate(
-                input_variables=["market_data", "economic_data", "headlines"],
-                template="""
-                You are a professional financial strategist providing a forward-looking outlook for a weekly investor newsletter.
-
-                Market data:
-                {market_data}
-
-                Economic indicators:
-                {economic_data}
-
-                Recent headlines:
-                {headlines}
-
-                Based on this information, write a comprehensive outlook (3-4 paragraphs) that:
-                1. Synthesizes the market and economic data to provide a forward-looking perspective
-                2. Identifies key risks and opportunities for investors in the coming weeks
-                3. Suggests potential investment strategies or sectors to watch
-                4. Considers how recent news might impact market sentiment
-
-                Use a professional, strategic tone. Provide specific, actionable insights that would be valuable to investors.
-                """
-            )
-
-            # Format market data for the prompt
-            market_data_text = ""
-            for index, data in market_summary.items():
-                index_name = self.stock_market._get_index_name(index)
-                change = data.get("daily_change_pct")
-                direction = "up" if change and change > 0 else "down"
-                change_text = f"{direction} {abs(change):.2f}%" if change is not None else "unchanged"
-                market_data_text += f"- {index_name}: {data.get('latest_close', 'N/A'):.2f}, {change_text}\n"
-
-            # Format economic data for the prompt
-            economic_data_text = ""
-            key_indicators = ["GDP", "Unemployment Rate", "CPI", "Fed Funds Rate"]
-            for indicator in key_indicators:
-                if indicator in economic_summary:
-                    data = economic_summary[indicator]
-                    value = data.get("latest_value")
-                    change = data.get("change_pct")
-
-                    # Format the value based on the indicator
-                    value_str = f"{value:.2f}"
-                    if "Rate" in indicator or "Unemployment" in indicator:
-                        value_str = f"{value:.2f}%"
-
-                    # Format the change
-                    change_str = ""
-                    if change is not None:
-                        direction = "up" if change > 0 else "down"
-                        change_str = f", {direction} {abs(change):.2f}%"
-
-                    economic_data_text += f"- {indicator}: {value_str}{change_str}\n"
-
-            # Format headlines for the prompt
-            headlines_text = ""
-            for i, headline in enumerate(headlines[:5]):  # Use top 5 headlines
-                headlines_text += f"- {headline.get('headline')}\n"
-
-            # Create the chain
-            llm = OpenAI(temperature=0.7)
-            chain = LLMChain(llm=llm, prompt=prompt)
-
-            # Run the chain
-            outlook = chain.run(
-                market_data=market_data_text,
-                economic_data=economic_data_text,
-                headlines=headlines_text
-            )
-
-            # Format the outlook
-            formatted_outlook = f"## Market Outlook\n\n{outlook.strip()}\n\n"
-
-            return formatted_outlook
-
-        except Exception as e:
-            self.logger.error(f"Error generating outlook: {str(e)}")
-            return "## Market Outlook\n\nOutlook could not be generated due to an error.\n\n"
+            logger.error(f"Error calling OpenAI API: {e}", exc_info=True)
+            return f"Error: Failed to get response from OpenAI - {e}"
+
+    def generate_newsletter(self) -> dict:
+        """Fetch data, generate summaries & analysis, assemble and return newsletter."""
+        logger.info("Starting newsletter generation")
+        # Fetch raw data
+        market = self.stock_data.fetch_data()
+        econ = self.econ_data.fetch_data()
+        news = self.news_data.fetch_data()
+        crypto = self.crypto_data.fetch_data()
+
+        # Check for data fetching errors
+        fetch_error = False
+        if market.get("error"):
+             logger.error(f"Market data fetch error: {market.get('error')}")
+             fetch_error = True # Mark as error if core market data fails
+        if econ.get("error"):
+             logger.warning(f"Economic data fetch error: {econ.get('error')}")
+             # Allow continuing, but AI analysis might be affected
+        if news.get("error"):
+             logger.warning(f"News data fetch error: {news.get('error')}")
+             # Allow continuing, but AI analysis might be affected
+        if crypto.get("error"):
+            logger.warning(f"Crypto data fetch error: {crypto.get('error')}")     
+
+
+        # --- Generate Formatted Raw Data Summaries ---
+        # These methods return pre-formatted markdown strings
+        logger.info("Formatting raw market data...")
+        formatted_market_summary = self.stock_data.format_data_for_report(market)
+        logger.info("Formatting raw economic data...")
+        formatted_econ_summary = self.econ_data.format_data_for_report(econ)
+        logger.info("Formatting raw news data...")
+        formatted_news_summary = self.news_data.format_data_for_report(news)
+        logger.info("Formatting raw crypto data...")
+        formatted_crypto_summary = self.crypto_data.format_data_for_report(crypto)
+
+
+        # --- Generate AI Analysis Sections ---
+        # Initialize with error messages in case of fetch failure or skipping
+        intro = "Introduction could not be generated due to data fetch errors."
+        market_analysis = "Market analysis could not be generated due to data fetch errors."
+        econ_analysis = "Economic analysis could not be generated due to data fetch errors."
+        crypto_analysis = "Crypto analysis could not be generated due to data fetch errors."
+        outlook = "Outlook could not be generated due to data fetch errors."
+
+        # Only attempt AI generation if core market data was fetched successfully
+        if not fetch_error:
+            logger.info("Generating introduction...")
+            intro = self._generate_introduction(market)
+
+            logger.info("Generating market analysis...")
+            market_analysis = self._generate_market_analysis(market)
+
+            if not econ.get("error"): # Only analyze if econ data is present
+                logger.info("Generating economic analysis...")
+                econ_analysis = self._generate_economic_analysis(econ)
+            else:
+                 econ_analysis = "_Economic analysis skipped due to data fetch error._"
+
+            if not crypto.get("error"):
+                logger.info("Generating crypto analysis...")
+                crypto_analysis = self._generate_crypto_analysis(crypto)
+            else:
+                crypto_analysis = "Crypto analysis skipped due to data fetch error._"
+
+            # Generate outlook - pass empty news if fetch failed
+            logger.info("Generating outlook...")
+            current_news_data = news if not news.get("error") else {"all_headlines": []}
+            outlook = self._generate_outlook(market, econ, current_news_data, crypto)
+
+            # Basic check if AI generation itself failed
+            if "Error:" in intro or "Error:" in market_analysis or "Error:" in econ_analysis or "Error:" in outlook:
+                 logger.error("Errors encountered during content generation from OpenAI.")
+        else:
+             logger.error("Skipping AI generation due to critical data fetch errors.")
+
+
+        # --- Combine and Format ---
+        logger.info("Formatting final newsletter...")
+        content = self._format_newsletter(
+            # AI Sections
+            introduction=intro,
+            market_analysis=market_analysis,
+            economic_analysis=econ_analysis,
+            crypto_analysis=crypto_analysis,
+            outlook=outlook,
+            # Formatted Raw Data Sections
+            formatted_market_summary=formatted_market_summary,
+            formatted_econ_summary=formatted_econ_summary,
+            formatted_news_summary=formatted_news_summary,
+            formatted_crypto_summary=formatted_crypto_summary
+        )
+        html_content = self._convert_to_html(content)
+
+        logger.info("Newsletter generation process complete.")
+        return {
+            "title": self.title,
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "content": content,
+            "html_content": html_content,
+            "raw_data": {"market": market, "economic": econ, "news": news, "crypto": crypto}
+        }
+
+    # --- AI Generation Helper Functions (_generate_introduction, etc.) ---
+    def _generate_introduction(self, market_data: dict) -> str:
+        today = datetime.now().strftime("%B %d, %Y")
+        idx = market_data.get("market_summary", {})
+        sp_data = idx.get("^GSPC", {})
+        sp = f"{sp_data.get('latest_close', 'N/A'):.2f}" if isinstance(sp_data.get('latest_close'), (int, float)) else "N/A"
+        dj_data = idx.get("^DJI", {})
+        dj = f"{dj_data.get('latest_close', 'N/A'):.2f}" if isinstance(dj_data.get('latest_close'), (int, float)) else "N/A"
+        nq_data = idx.get("^IXIC", {})
+        nq = f"{nq_data.get('latest_close', 'N/A'):.2f}" if isinstance(nq_data.get('latest_close'), (int, float)) else "N/A"
+
+        system = "You are a professional financial analyst writing a concise weekly newsletter introduction."
+        user = (
+            f"Today is {today}.\n"
+            f"Current Key Market Levels (for context only, do not repeat in the output): S&P 500: {sp}, Dow Jones: {dj}, NASDAQ Composite: {nq}.\n"
+            "Write a 2-paragraph summary of the past week's overall market sentiment and key themes relevant to investors. Focus on tone and broad trends, not specific numbers or detailed analysis."
+        )
+        return self._call_openai([{"role": "system", "content": system}, {"role": "user", "content": user}])
+
+    def _generate_market_analysis(self, market_data: dict) -> str:
+        summary = market_data.get("market_summary", {})
+        prompt_summary = ""
+        count = 0
+        for sym, data in summary.items():
+             if data and isinstance(data.get('latest_close'), (int, float)) and count < 4:
+                 prompt_summary += f"- {sym}: ~{data['latest_close']:.0f}. "
+                 count += 1
+        if not prompt_summary: prompt_summary = "Market summary data unavailable."
+
+        system = "You are an insightful financial analyst writing the Market Analysis section of a weekly newsletter."
+        user = (
+            f"Based on the past week's market action (context: {prompt_summary}), write a 3-paragraph analysis covering the key drivers of overall market performance (positive or negative), notable sector trends (which industries did well or poorly), and any significant technical patterns or market indicators observed. Be specific but maintain a professional tone. Do not simply list the context numbers."
+        )
+        return self._call_openai([{"role": "system", "content": system}, {"role": "user", "content": user}])
+    
+    def _generate_crypto_analysis(self, crypto_data: dict) -> str:
+        summary = crypto_data.get("crypto_summary", {})
+        prompt_summary = ""
+        count = 0
+        for coin, data in summary.items():
+            if data and isinstance(data.get('latest_close'), (int, float)) and count < 4:
+                prompt_summary += f"- {coin}: ~{data['latest_close']:.0f}. "
+                count += 1
+        if not prompt_summary:  prompt_summary = "Crypto summary not available"
+        system = "You are an insightful financial analyst writing the Crypto Analysis section of a weekly newsletter."
+        user = (
+            f"Based on the past week's crypto market action (context: {prompt_summary}), write a 3-paragraph analysis covering the key drivers of overall crypto market performance (positive or negative), notable sector trends (which industries did well or poorly), and any significant technical patterns or crypto market indicators observed. Be specific but maintain a professional tone. Do not simply list the context numbers."
+        )
+        return self._call_openai([{"role": "system", "content": system}, {"role": "user", "content": user}])
+
+    def _generate_economic_analysis(self, econ_data: dict) -> str:
+        items = econ_data.get("economic_summary", {})
+        prompt_summary = ""
+        count = 0
+        key_indicators = ["GDP", "Unemployment Rate", "CPI", "Fed Funds Rate", "Industrial Production"]
+        for ind in key_indicators:
+             data = items.get(ind)
+             if data and isinstance(data.get('latest_value'), (int, float)) and count < 5:
+                 unit = "%" if 'Rate' in ind or '%' in ind else ""
+                 prompt_summary += f"- {ind}: {data['latest_value']:.1f}{unit}. "
+                 count += 1
+        if not prompt_summary: prompt_summary = "Key economic indicator data unavailable."
+
+        system = "You are a sharp economist writing the Economic Analysis section of a weekly newsletter."
+        user = (
+            f"Based on recent key economic indicators (context: {prompt_summary}), write a 3-paragraph analysis discussing the implications for economic growth, inflation trends, the employment situation, and potential impacts on monetary policy (e.g., interest rates). Connect the indicators where possible. Do not simply list the context numbers."
+        )
+        return self._call_openai([{"role": "system", "content": system}, {"role": "user", "content": user}])
+
+    def _generate_outlook(self, market_data: dict, econ_data: dict, news_data: dict, crypto_data: dict) -> str:
+        headlines = news_data.get("all_headlines", [])
+        headlines = headlines[:min(len(headlines), 3)]
+        news_txt = "\n".join([f"- {h['headline']}" for h in headlines if h and 'headline' in h]) if headlines else "No recent headlines available for context."
+
+        top_stocks = market_data.get("top_stocks", [])
+        market_context = ""
+        if top_stocks:
+            top_performer = max(top_stocks, key=lambda x: x.get('daily_change_pct') or -float('inf'))
+            worst_performer = min(top_stocks, key=lambda x: x.get('daily_change_pct') or float('inf'))
+            market_context = f"Top market mover (24h): {top_performer.get('name')} ({top_performer.get('daily_change_pct', 0):.1f}%). "
+            market_context += f"Bottom crypto mover (24h): {worst_performer.get('name')} ({worst_performer.get('daily_change_pct', 0):.1f}%)."
+
+        # Brief crypto context if available
+        top_cryptos = crypto_data.get("top_cryptos", [])
+        crypto_context = ""
+        if top_cryptos:
+             top_performer = max(top_cryptos, key=lambda x: x.get('daily_change_pct') or -float('inf'))
+             worst_performer = min(top_cryptos, key=lambda x: x.get('daily_change_pct') or float('inf'))
+             crypto_context = f"Top crypto mover (24h): {top_performer.get('name')} ({top_performer.get('daily_change_pct', 0):.1f}%). "
+             crypto_context += f"Bottom crypto mover (24h): {worst_performer.get('name')} ({worst_performer.get('daily_change_pct', 0):.1f}%)."
+
+        system = "You are an experienced financial strategist writing the Outlook section for a weekly newsletter."
+        user = (
+            f"Considering the market action and economic data analyzed previously, plus these recent key news headlines (for context only):\n{news_txt}\n\n"
+            f"Also note recent crypto action (for context only): {crypto_context}\n\n"
+            "Write a 3-paragraph forward-looking outlook for investors. Discuss potential risks on the horizon and identify possible opportunities or areas to watch in the coming week(s). Be balanced and avoid making definitive predictions."
+        )
+        return self._call_openai([{"role": "system", "content": system}, {"role": "user", "content": user}])
+
+    # --- Formatting Function ---
 
     def _format_newsletter(self, **sections) -> str:
-        """
-        Format the complete newsletter.
+        """Combine AI sections and formatted raw data into final markdown newsletter."""
 
-        Args:
-            **sections: Newsletter sections
+        md_content = [f"# {self.title}", f"**{datetime.now().strftime('%B %d, %Y')}**"]
 
-        Returns:
-            Formatted newsletter content
-        """
-        # Order of sections
-        section_order = [
-            "introduction",
-            "market_summary",
-            "market_analysis",
-            "economic_summary",
-            "economic_analysis",
-            "news_summary",
-            "outlook"
-        ]
+        # --- Section 1: Introduction (AI) ---
+        intro_text = sections.get('introduction', '_Introduction could not be generated._')
+        if intro_text and "Error:" not in intro_text:
+            md_content.append("## Introduction")
+            md_content.append(intro_text)
+        else:
+             md_content.append("## Introduction")
+             md_content.append(f"_{intro_text}_") # Show error if exists
 
-        # Combine sections in order
-        content = []
-        for section in section_order:
-            if section in sections and sections[section]:
-                content.append(sections[section])
+        # --- Section 2: Market Analysis (AI) ---
+        market_analysis_text = sections.get('market_analysis', '_Market analysis could not be generated._')
+        if market_analysis_text and "Error:" not in market_analysis_text:
+            md_content.append("## Market Analysis")
+            md_content.append(market_analysis_text)
+        else:
+             md_content.append("## Market Analysis")
+             md_content.append(f"_{market_analysis_text}_")
 
-        # Add footer
-        footer = f"\n\n---\n\n*This newsletter was automatically generated on {datetime.now().strftime('%Y-%m-%d')}.*"
-        content.append(footer)
+        # --- Section 3: Market Data Summary (Raw Formatted) ---
+        # This assumes formatted_market_summary starts with "# Market Summary" or similar
+        market_summary_raw = sections.get('formatted_market_summary', '_Market data summary unavailable._')
+        # We add it directly as it should contain its own top-level title from its formatter
+        md_content.append(market_summary_raw)
 
-        return "\n".join(content)
+        # --- Section 4: Economic Analysis (AI) ---
+        econ_analysis_text = sections.get('economic_analysis', '_Economic analysis could not be generated._')
+        if econ_analysis_text and "Error:" not in econ_analysis_text and "skipped" not in econ_analysis_text:
+            md_content.append("## Economic Analysis")
+            md_content.append(econ_analysis_text)
+        else:
+             md_content.append("## Economic Analysis")
+             md_content.append(f"_{econ_analysis_text}_")
+
+        # --- Section 5: Economic Indicators (Raw Formatted) ---
+        # Assumes formatted_econ_summary starts with "# Economic Indicators"
+        econ_summary_raw = sections.get('formatted_econ_summary', '_Economic indicators data unavailable._')
+        md_content.append(econ_summary_raw)
+
+        # --- Section 6: Crypto Data Summary (Raw Formatted) ---
+        crypto_summary_raw = sections.get('formatted_crypto_summary', '_crypto data summary unavailable_')
+        md_content.append(crypto_summary_raw)
+
+        # --- Section 7: Crypto Analysis (AI) ---
+        crypto_analysis_text = sections.get('crypto_analysis', '_Crypto analysis could not be generated._')
+        if crypto_analysis_text and "Error:" not in crypto_analysis_text and "skipped" not in crypto_analysis_text:
+            md_content.append("## Crypto Analysis")
+            md_content.append(crypto_analysis_text)
+        else:
+            md_content.append("## Crypto Analysis")
+            md_content.append(f"_{crypto_analysis_text}_")    
+
+        # --- Section 8: Recent News (Raw Formatted) ---
+        # Assumes formatted_news_summary starts with "# Financial News Headlines"
+        news_summary_raw = sections.get('formatted_news_summary', '_News headlines unavailable._')
+        md_content.append(news_summary_raw)
+
+        # --- Section 9: Outlook (AI) ---
+        outlook_text = sections.get('outlook', '_Outlook could not be generated._')
+        if outlook_text and "Error:" not in outlook_text:
+            md_content.append("## Outlook")
+            md_content.append(outlook_text)
+        else:
+             md_content.append("## Outlook")
+             md_content.append(f"_{outlook_text}_")
+
+        # --- Footer ---
+        footer = f"\n---\n*Disclaimer: This newsletter is for informational purposes only and does not constitute financial advice. Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*"
+        md_content.append(footer)
+
+        # Join all parts with double newlines for markdown paragraphs/spacing
+        return "\n\n".join(md_content)
 
     def _convert_to_html(self, markdown_content: str) -> str:
-        """
-        Convert markdown content to HTML.
-
-        Args:
-            markdown_content: Newsletter content in markdown format
-
-        Returns:
-            HTML formatted newsletter
-        """
+        """Convert markdown to HTML using the markdown library with styling."""
         try:
-            # Try to import markdown
             import markdown
-
-            # Convert markdown to HTML
-            html = markdown.markdown(markdown_content)
-
-            # Add basic styling
-            styled_html = f"""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <meta charset="UTF-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>{self.title}</title>
-                <style>
-                    body {{
-                        font-family: Arial, sans-serif;
-                        line-height: 1.6;
-                        color: #333;
-                        max-width: 800px;
-                        margin: 0 auto;
-                        padding: 20px;
-                    }}
-                    h1, h2, h3 {{
-                        color: #2c3e50;
-                    }}
-                    h1 {{
-                        border-bottom: 2px solid #eee;
-                        padding-bottom: 10px;
-                    }}
-                    h2 {{
-                        border-bottom: 1px solid #eee;
-                        padding-bottom: 5px;
-                        margin-top: 30px;
-                    }}
-                    a {{
-                        color: #3498db;
-                        text-decoration: none;
-                    }}
-                    a:hover {{
-                        text-decoration: underline;
-                    }}
-                    .footer {{
-                        margin-top: 40px;
-                        padding-top: 20px;
-                        border-top: 1px solid #eee;
-                        font-size: 0.8em;
-                        color: #7f8c8d;
-                    }}
-                </style>
-            </head>
-            <body>
-                {html}
-            </body>
-            </html>
-            """
-
-            return styled_html
-
+            # Use extensions for better formatting like tables, fenced code, line breaks
+            html_body = markdown.markdown(markdown_content, extensions=['tables', 'fenced_code', 'nl2br'])
         except ImportError:
-            self.logger.warning("Markdown module not found. Returning plain HTML.")
+            logger.warning("markdown library not found, using basic conversion.")
+            # Basic HTML escaping for safety
+            escaped_content = html.escape(markdown_content)
+            # Simple replacements for basic markdown structure
+            # This fallback is very basic and might not look great
+            html_body = escaped_content.replace('\n\n', '</p><p>')
+            html_body = html_body.replace('\n* ', '</li><li>').replace('\n- ', '</li><li>')
+            if '<li>' in html_body: html_body = f"<ul><li>{html_body.split('<li>', 1)[1]}</li></ul>" # Basic list wrapping
+            html_body = html_body.replace('# ', '<h1>').replace('## ', '<h2>').replace('### ', '<h3>')
+            html_body = f"<p>{html_body}</p>" # Wrap loose text
 
-            # Simple markdown to HTML conversion for basic elements
-            html = markdown_content
-            html = html.replace("# ", "<h1>").replace("\n## ", "</h1>\n<h2>").replace("\n### ", "</h2>\n<h3>")
-            html = html.replace("\n\n", "</p><p>")
-            html = f"<p>{html}</p>"
-            html = html.replace("</h1>\n<p>", "</h1><p>").replace("</h2>\n<p>", "</h2><p>").replace("</h3>\n<p>", "</h3><p>")
-
-            return f"<html><body>{html}</body></html>"
+        # Add CSS styling wrapper
+        # (Using the same style block as the previous version)
+        styled_html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>{self.title}</title>
+            <style>
+                body {{ font-family: sans-serif; line-height: 1.6; color: #333; max-width: 700px; margin: 20px auto; padding: 15px; border: 1px solid #eee; }}
+                h1, h2, h3 {{ color: #2c3e50; margin-top: 1.5em; margin-bottom: 0.5em; }}
+                h1 {{ border-bottom: 2px solid #3498db; padding-bottom: 0.3em; font-size: 1.8em; }}
+                h2 {{ border-bottom: 1px solid #eee; padding-bottom: 0.2em; font-size: 1.4em; }}
+                h3 {{ font-size: 1.1em; color: #34495e; }}
+                p {{ margin-bottom: 1em; }}
+                a {{ color: #3498db; text-decoration: none; }}
+                a:hover {{ text-decoration: underline; }}
+                ul {{ padding-left: 20px; list-style-type: disc; }} /* Ensure list styling */
+                li {{ margin-bottom: 0.5em; }}
+                code {{ background-color: #f4f4f4; padding: 2px 4px; border-radius: 3px; font-family: monospace; }}
+                pre {{ background-color: #f4f4f4; padding: 10px; border-radius: 4px; overflow-x: auto; }}
+                .footer {{ margin-top: 2em; padding-top: 1em; border-top: 1px solid #eee; font-size: 0.85em; color: #7f8c8d; }}
+            </style>
+        </head>
+        <body>
+            {html_body}
+        </body>
+        </html>
+        """
+        return styled_html

@@ -11,7 +11,9 @@ import json
 import re
 
 from .base import DataSource
-from config.logger import logger
+import logging
+
+logger = logging.getLogger(__name__)
 
 class NewsHeadlines(DataSource):
     """
@@ -43,7 +45,7 @@ class NewsHeadlines(DataSource):
             }
         ]
 
-        self.logger = logger.getChild(self.__class__.__name__)
+        self.logger = logger
 
     def fetch_data(self, 
                   sources: Optional[List[Dict[str, Any]]] = None,

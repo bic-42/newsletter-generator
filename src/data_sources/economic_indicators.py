@@ -11,7 +11,9 @@ import json
 
 from .base import DataSource
 from ..config import ALPHA_VANTAGE_API_KEY, FRED_API_KEY
-from config.logger import logger
+import logging
+
+logger = logging.getLogger(__name__)
 
 class EconomicIndicators(DataSource):
     """
@@ -41,7 +43,7 @@ class EconomicIndicators(DataSource):
             "M2": "M2 Money Supply"        # M2 Money Supply
         }
 
-        self.logger = logger.getChild(self.__class__.__name__)
+        self.logger = logger
 
     def fetch_data(self, 
                   fred_indicators: Optional[Dict[str, str]] = None,
