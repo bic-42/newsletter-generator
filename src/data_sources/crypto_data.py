@@ -26,90 +26,112 @@ class CryptoDataSource(DataSource):
     def __init__(self):
         super().__init__(name="Cryptocurrency Data")
         # --- Option 1: Using pycoingecko library ---
-        try:
-            self.coingecko_api_url = "https://api.coingecko.com"
-            self.cg = CoinGeckoAPI(demo_api_key=COINGECKO_API_KEY)
-            # Test connection
-            self.cg.ping()
-            logger.info("CoinGeckoAPI client initialized.")
-        except Exception as e:
-            logger.error(f"Failed to initialize CoinGeckoAPI: {e}")
-            self.cg = None
+        # try:
+        #     self.coingecko_api_url = "https://api.coingecko.com"
+        #     self.cg = CoinGeckoAPI(demo_api_key=COINGECKO_API_KEY)
+        #     # Test connection
+        #     self.cg.ping()
+        #     logger.info("CoinGeckoAPI client initialized.")
+        # except Exception as e:
+        #     logger.error(f"Failed to initialize CoinGeckoAPI: {e}")
+        #     self.cg = None
 
         # --- Option 2: Using direct requests ---
-        # self.coingecko_api_url = "https://api.coingecko.com/api/v3"
-        # logger.info("CryptoDataSource initialized for direct CoinGecko requests.")
+        self.coingecko_api_url = "https://api.coingecko.com/api/v3"
+        logger.info("CryptoDataSource initialized for direct CoinGecko requests.")
         # # No API key needed for public endpoints used here, but rate limits apply
 
 
     def _get_top_crypto_data(self, top_n: int = 10, exclude_stablecoins: bool = True) -> List[Dict[str, Any]]:
-        """
-        Fetches top N cryptocurrencies by market cap from CoinGecko, excluding stablecoins.
-        """
-        logger.info(f"Fetching top {top_n} crypto data from CoinGecko...")
-        coins_to_fetch = top_n + 10 # Fetch slightly more to account for filtering stablecoins
-        endpoint = f"{self.coingecko_api_url}/coins/markets"
-        params = {
-            'vs_currency': 'usd',
-            'order': 'market_cap_desc',
-            'per_page': coins_to_fetch,
-            'page': 1,
-            'sparkline': 'false',
-            'price_change_percentage': '24h,7d' # Request % changes
-        }
-        headers = {'accept': 'application/json'}
-        filtered_coins_data = []
+            """
+            Fetches top N cryptocurrencies by market cap from CoinGecko using direct requests,
+            excluding stablecoins.
+            """
+            logger.info(f"Fetching top {top_n} crypto data from CoinGecko...")
+            # Fetch slightly more to account for filtering stablecoins
+            coins_to_fetch = top_n + 15 # Increased buffer slightly
 
-        try:
-            # --- Make the API Call ---
-            response = requests.get(endpoint, params=params, headers=headers, timeout=15)
-            response.raise_for_status() # Raises HTTPError for bad responses (4XX, 5XX)
-            raw_data = response.json()
-            # --- API Call Success ---
+            # *** CORRECTED URL *** (Uses self.coingecko_api_url defined in __init__)
+            endpoint = f"{self.coingecko_api_url}/coins/markets"
 
-            count = 0
-            for coin in raw_data:
-                if count >= top_n:
-                    break # Stop once we have enough non-stablecoins
+            # *** CORRECTED PARAMS ***
+            params = {
+                'vs_currency': 'usd',
+                'order': 'market_cap_desc',
+                'per_page': coins_to_fetch, # <-- Use the integer variable
+                'page': 1,
+                'sparkline': 'false',
+                'price_change_percentage': '24h,7d' # Request needed % changes
+            }
+            headers = {'accept': 'application/json'}
 
-                symbol = coin.get('symbol', '').lower()
-                # Filter stablecoins
-                if exclude_stablecoins and symbol in STABLECOIN_SYMBOLS:
-                    logger.debug(f"Skipping stablecoin: {coin.get('name')} ({symbol})")
-                    continue
+            # *** Optional: Add API Key for Pro Plan ***
+            # if COINGECKO_API_KEY:
+            #     # Check CoinGecko Pro docs for correct param name (e.g., x_cg_pro_api_key)
+            #     params['x_cg_pro_api_key'] = COINGECKO_API_KEY
+            #     # OR add to headers if required: headers['x-cg-pro-api-key'] = COINGECKO_API_KEY
 
-                # Extract relevant info (adjust keys based on actual API response if needed)
-                coin_info = {
-                    "id": coin.get('id'),
-                    "symbol": symbol.upper(), # Store uppercase symbol
-                    "name": coin.get('name'),
-                    "latest_price": coin.get('current_price'),
-                    "market_cap": coin.get('market_cap'),
-                    "daily_change_pct": coin.get('price_change_percentage_24h'),
-                    # Note: CoinGecko API might return 7d change under a different key, adjust if needed
-                    "weekly_change_pct": coin.get('price_change_percentage_7d_in_currency'),
-                    "rank": coin.get('market_cap_rank')
-                }
-                # Basic validation that we have key data
-                if coin_info['symbol'] and coin_info['name'] and coin_info['latest_price'] is not None:
-                     filtered_coins_data.append(coin_info)
-                     count += 1
-                else:
-                     logger.warning(f"Incomplete data for coin: {coin.get('id')}, skipping.")
+            filtered_coins_data = []
+
+            try:
+                # --- Make the API Call ---
+                logger.debug(f"Requesting CoinGecko URL: {endpoint}")
+                logger.debug(f"Requesting CoinGecko PARAMS: {params}")
+                response = requests.get(endpoint, params=params, headers=headers, timeout=15)
+                response.raise_for_status() # Raises HTTPError for bad responses (4XX, 5XX)
+                raw_data = response.json()
+                # --- API Call Success ---
+
+                count = 0
+                if not isinstance(raw_data, list):
+                    logger.error(f"CoinGecko response was not a list: {type(raw_data)}")
+                    return [] # Return empty if response format is wrong
+
+                for coin in raw_data:
+                    if count >= top_n:
+                        break # Stop once we have enough non-stablecoins
+
+                    symbol = coin.get('symbol', '').lower()
+                    # Filter stablecoins
+                    if exclude_stablecoins and symbol in STABLECOIN_SYMBOLS:
+                        logger.debug(f"Skipping stablecoin: {coin.get('name')} ({symbol})")
+                        continue
+
+                    # Extract relevant info (adjust keys based on actual API response if needed)
+                    coin_info = {
+                        "id": coin.get('id'),
+                        "symbol": symbol.upper(), # Store uppercase symbol
+                        "name": coin.get('name'),
+                        "latest_price": coin.get('current_price'),
+                        "market_cap": coin.get('market_cap'),
+                        "daily_change_pct": coin.get('price_change_percentage_24h'),
+                        # Check if CoinGecko returns 7d change under this specific key for /coins/markets
+                        "weekly_change_pct": coin.get('price_change_percentage_7d_in_currency'),
+                        "rank": coin.get('market_cap_rank')
+                    }
+                    # Basic validation that we have key data
+                    if coin_info['symbol'] and coin_info['name'] and coin_info['latest_price'] is not None:
+                        filtered_coins_data.append(coin_info)
+                        count += 1
+                    else:
+                        logger.warning(f"Incomplete data for coin: {coin.get('id')}, skipping.")
 
 
-            if count < top_n:
-                 logger.warning(f"Could only fetch {count} non-stablecoin cryptos (requested {top_n}).")
+                if count < top_n:
+                    logger.warning(f"Could only fetch {count} non-stablecoin cryptos (requested {top_n}).")
 
 
-        except requests.exceptions.RequestException as e:
-            logger.error(f"HTTP Error fetching CoinGecko data: {e}", exc_info=True)
-        except json.JSONDecodeError as e:
-             logger.error(f"Error decoding CoinGecko JSON response: {e}")
-        except Exception as e:
-            logger.error(f"Failed to fetch or parse top crypto data: {e}", exc_info=True)
+            except requests.exceptions.HTTPError as http_err:
+                # Log specific HTTP errors (like 404, 429 Rate Limit, etc.)
+                logger.error(f"HTTP Error fetching CoinGecko data: {http_err}", exc_info=True)
+            except requests.exceptions.RequestException as req_err:
+                logger.error(f"Request Exception fetching CoinGecko data: {req_err}", exc_info=True)
+            except json.JSONDecodeError as json_err:
+                logger.error(f"Error decoding CoinGecko JSON response: {json_err}")
+            except Exception as e:
+                logger.error(f"Failed to fetch or parse top crypto data: {e}", exc_info=True)
 
-        return filtered_coins_data
+            return filtered_coins_data
 
 
     def fetch_data(self, top_n: int = 10, exclude_stablecoins: bool = True) -> Dict[str, Any]:

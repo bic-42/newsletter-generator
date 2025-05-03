@@ -254,6 +254,8 @@ class NewsletterGenerator:
              crypto_context = f"Top crypto mover (24h): {top_performer.get('name')} ({top_performer.get('daily_change_pct', 0):.1f}%). "
              crypto_context += f"Bottom crypto mover (24h): {worst_performer.get('name')} ({worst_performer.get('daily_change_pct', 0):.1f}%)."
 
+        
+
         system = "You are an experienced financial strategist writing the Outlook section for a weekly newsletter."
         user = (
             f"Considering the market action and economic data analyzed previously, plus these recent key news headlines (for context only):\n{news_txt}\n\n"
@@ -360,7 +362,6 @@ class NewsletterGenerator:
             html_body = f"<p>{html_body}</p>" # Wrap loose text
 
         # Add CSS styling wrapper
-        # (Using the same style block as the previous version)
         styled_html = f"""
         <!DOCTYPE html>
         <html>
